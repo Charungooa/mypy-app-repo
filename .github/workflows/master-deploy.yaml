@@ -1,0 +1,25 @@
+name: Prod Build
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-deploy-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to Azure Container Registry (Prod)
+        uses: azure/docker-login@v1
+        with:
+          login-server: acrmicroserviceprod.azurecr.io
+          username: ${{ secrets.ACR_PROD_USERNAME }}
+          password: ${{ secrets.ACR_PROD_PASSWORD }}
+
+      - name: Build and Push
+        run: |
+          docker build -t acrmicroserviceprod.azurecr.io/myapp:latest .
+          docker push acrmicroserviceprod.azurecr.io/myapp:latest

@@ -1,0 +1,25 @@
+name: Staging Build
+
+on:
+  push:
+    branches:
+      - release
+
+jobs:
+  build-deploy-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to Azure Container Registry (Staging)
+        uses: azure/docker-login@v1
+        with:
+          login-server: acrmicroservicestaging.azurecr.io
+          username: ${{ secrets.ACR_STAGING_USERNAME }}
+          password: ${{ secrets.ACR_STAGING_PASSWORD }}
+
+      - name: Build and Push
+        run: |
+          docker build -t acrmicroservicestaging.azurecr.io/myapp:latest .
+          docker push acrmicroservicestaging.azurecr.io/myapp:latest

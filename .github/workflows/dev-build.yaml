@@ -1,0 +1,25 @@
+name: Dev Build
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  build-deploy-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to Azure Container Registry (Dev)
+        uses: azure/docker-login@v1
+        with:
+          login-server: acrmicroservicedev.azurecr.io
+          username: ${{ secrets.ACR_DEV_USERNAME }}
+          password: ${{ secrets.ACR_DEV_PASSWORD }}
+
+      - name: Build and Push
+        run: |
+          docker build -t acrmicroservicedev.azurecr.io/myapp:latest .
+          docker push acrmicroservicedev.azurecr.io/myapp:latest
