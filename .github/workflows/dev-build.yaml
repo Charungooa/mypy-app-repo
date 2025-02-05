@@ -1,9 +1,10 @@
 name: Dev Build
 
 on:
-  push:
-    branches:
-      - develop
+    # push:
+    #     branches:
+    #         - develop
+    workflow_dispatch:
 
 jobs:
   build-deploy-dev:
@@ -15,11 +16,11 @@ jobs:
       - name: Login to Azure Container Registry (Dev)
         uses: azure/docker-login@v1
         with:
-          login-server: acrmicroservicedev.azurecr.io
+          login-server: terraacr2025dev.azurecr.io
           username: ${{ secrets.ACR_DEV_USERNAME }}
           password: ${{ secrets.ACR_DEV_PASSWORD }}
 
       - name: Build and Push
         run: |
-          docker build -t acrmicroservicedev.azurecr.io/myapp:latest .
-          docker push acrmicroservicedev.azurecr.io/myapp:latest
+          docker build -t terraacr2025dev.azurecr.io/myapp:latest .
+          docker push terraacr2025dev.azurecr.io/myapp:latest
