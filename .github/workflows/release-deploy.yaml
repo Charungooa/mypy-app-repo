@@ -1,9 +1,9 @@
 name: Stage Build and Deploy
 
 on:
-  # push:
-  #   branches:
-  #     - main
+  push:
+    branches:
+      - staging
   workflow_dispatch:
 
 jobs:
