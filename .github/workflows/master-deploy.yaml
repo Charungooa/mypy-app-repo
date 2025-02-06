@@ -31,7 +31,7 @@ jobs:
           cd flux-gitops02
 
           # Update deployment.yaml with the new image tag
-          sed -i 's|image: terraacr2025prod.azurecr.io/myapp:.*|image: terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' prod/deployment.yaml
+          sed -i 's|image: terraacr2025prod.azurecr.io/myapp:.*|image: terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' dev/deployment.yaml
 
           # Commit and Push Changes
           git config --global user.email "github-actions@github.com"
