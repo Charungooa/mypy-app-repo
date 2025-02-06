@@ -15,15 +15,15 @@ jobs:
 
       - name: Log in to Azure Container Registry
         run: |
-          echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025prod.azurecr.io -u ${{ secrets.ACR_STAGE_USERNAME }} --password-stdin
+          echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025stage.azurecr.io -u ${{ secrets.ACR_STAGE_USERNAME }} --password-stdin
 
       - name: Set Image Tag
         run: echo "IMAGE_TAG=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV  # Generates a timestamp-based tag
 
       - name: Build and Push Docker Image to ACR
         run: |
-          docker build -t terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
-          docker push terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}
+          docker build -t terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
+          docker push terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }}
 
       - name: Update FluxCD GitOps Repository with New Image Tag
         run: |
@@ -31,11 +31,11 @@ jobs:
           cd flux-gitops02
 
           # Update deployment.yaml with the new image tag
-          sed -i 's|image: terraacr2025prod.azurecr.io/myapp:.*|image: terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' dev/deployment.yaml
+          sed -i 's|image: terraacr2025stage.azurecr.io/myapp:.*|image: terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' staging/deployment.yaml
 
           # Commit and Push Changes
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
-          git add dev/deployment.yaml
+          git add staging/deployment.yaml
           git commit -m "Update image to ${{ env.IMAGE_TAG }}"
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
