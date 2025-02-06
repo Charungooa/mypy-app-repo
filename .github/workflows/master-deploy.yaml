@@ -4,7 +4,7 @@ on:
   # push:
   #   branches:
   #     - master
-  workflow_dispatch:
+    workflow_dispatch:
 
 jobs:
   build-deploy-prod:
@@ -16,11 +16,29 @@ jobs:
       - name: Login to Azure Container Registry (Prod)
         uses: azure/docker-login@v1
         with:
-          login-server: terraacr2025prod.azurecr.io
+          login-server: acrmicroserviceprod.azurecr.io
           username: ${{ secrets.ACR_PROD_USERNAME }}
           password: ${{ secrets.ACR_PROD_PASSWORD }}
 
-      - name: Build and Push
+      - name: Set Image Tag
+        run: echo "IMAGE_TAG=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV  # Generates a timestamp-based tag
+
+      - name: Build and Push Docker Image to ACR
         run: |
-          docker build -t terraacr2025prod.azurecr.io/myapp:latest .
-          docker push terraacr2025prod.azurecr.io/myapp:latest
+          docker build -t terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
+          docker push terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}
+
+      - name: Update FluxCD GitOps Repository with New Image Tag
+        run: |
+          git clone https://github.com/charungooa/flux-gitops02.git
+          cd flux-gitops02
+
+          # Update deployment.yaml with the new image tag
+          sed -i 's|image: terraacr2025prod.azurecr.io/myapp:.*|image: terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' dev/deployment.yaml
+
+          # Commit and Push Changes
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git add dev/deployment.yaml
+          git commit -m "Update image to ${{ env.IMAGE_TAG }}"
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
