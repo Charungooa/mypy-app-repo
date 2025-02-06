@@ -1,9 +1,10 @@
 name: Prod Build
 
 on:
-  push:
-    branches:
-      - master
+  # push:
+  #   branches:
+  #     - master
+  workflow_dispatch:
 
 jobs:
   build-deploy-prod:
@@ -15,11 +16,11 @@ jobs:
       - name: Login to Azure Container Registry (Prod)
         uses: azure/docker-login@v1
         with:
-          login-server: acrmicroserviceprod.azurecr.io
+          login-server: terraacr2025prod.azurecr.io
           username: ${{ secrets.ACR_PROD_USERNAME }}
           password: ${{ secrets.ACR_PROD_PASSWORD }}
 
       - name: Build and Push
         run: |
-          docker build -t acrmicroserviceprod.azurecr.io/myapp:latest .
-          docker push acrmicroserviceprod.azurecr.io/myapp:latest
+          docker build -t terraacr2025prod.azurecr.io/myapp:latest .
+          docker push terraacr2025prod.azurecr.io/myapp:latest
