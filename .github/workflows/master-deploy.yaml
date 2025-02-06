@@ -36,6 +36,6 @@ jobs:
           # Commit and Push Changes
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
-          git add prod/deployment.yaml
+          git add dev/deployment.yaml
           git commit -m "Update image to ${{ env.IMAGE_TAG }}"
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
