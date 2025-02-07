@@ -1,3 +1,1 @@
-.github/workflows/dev-build.yaml merge=ours
-.github/workflows/master-deploy.yaml merge=ours
-.github/workflows/release-deploy.yaml merge=ours
+.github/workflows/* merge=ours
