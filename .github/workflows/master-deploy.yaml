@@ -1,42 +1,96 @@
 name: Prod Build and Deploy
 
 on:
-  push:
+  pull_request:
     branches:
       - main
-  workflow_dispatch:
+    types:
+      - closed
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.event.pull_request.merged == true
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Log in to Azure Container Registry
+        with:
+          fetch-depth: 0
+      
+      - name: Azure CLI Login
         run: |
-          echo "${{ secrets.ACR_PROD_PASSWORD }}" | docker login terraacr2025prod.azurecr.io -u ${{ secrets.ACR_PROD_USERNAME }} --password-stdin
+          az login --service-principal \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
-      - name: Set Image Tag
-        run: echo "IMAGE_TAG=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV  # Generates a timestamp-based tag
-
-      - name: Build and Push Docker Image to ACR
+      - name: Log in to Azure Container Registry (Prod)
         run: |
-          docker build -t terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
-          docker push terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}
+          echo "${{ secrets.ACR_PROD_PASSWORD }}" | docker login terraacr2025prod.azurecr.io \
+            -u "${{ secrets.ACR_PROD_USERNAME }}" --password-stdin
+          az acr login --name terraacr2025prod
 
-      - name: Update FluxCD GitOps Repository with New Image Tag
+      - name: Fetch latest image tag from Prod ACR (Debugging)
+        id: versioning
         run: |
-          git clone https://github.com/charungooa/flux-gitops02.git
-          cd flux-gitops02
+          echo "=== Fetching all tags from Prod ACR ==="
+          az acr repository show-tags --name terraacr2025prod --repository myapp --orderby time_desc --output table
 
-          # Update deployment.yaml with the new image tag
-          sed -i 's|image: terraacr2025prod.azurecr.io/myapp:.*|image: terraacr2025prod.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' prod/deployment.yaml
+          echo "=== Fetching latest vX.Y.Z tag ==="
+          LATEST_TAG=$(az acr repository show-tags --name terraacr2025prod \
+                      --repository myapp \
+                      --orderby time_desc \
+                      --output tsv \
+                      | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ {print; exit}')
 
-          # Commit and Push Changes
+          echo "Latest tag from ACR: $LATEST_TAG"
+
+          [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
+
+          echo "=== Debugging tag parsing ==="
+          echo "RAW LATEST_TAG = $LATEST_TAG"
+
+          MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
+          MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
+          PATCH=$(echo "$LATEST_TAG" | awk -F. '{print $3}')
+
+          echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
+
+          # Increment PATCH version
+          NEW_PATCH=$((PATCH + 1))
+          IMAGE_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "NEW image tag (after increment) = $IMAGE_TAG"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image to Prod ACR
+        run: |
+          echo "Using IMAGE_TAG=$IMAGE_TAG"
+          docker build -t terraacr2025prod.azurecr.io/myapp:$IMAGE_TAG .
+          docker push terraacr2025prod.azurecr.io/myapp:$IMAGE_TAG
+
+      - name: Update FluxCD GitOps Repository (Debugging)
+        run: |
+          git clone --branch main --single-branch \
+            https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
+            flux-repo
+
+          cd flux-repo
+
+          echo "=== BEFORE SED: prod/deployment.yaml ==="
+          cat prod/deployment.yaml
+
+          echo "=== Running sed to update image tag ==="
+          sed -i "s|^\(\s*image:\s*\)terraacr2025prod.azurecr.io/myapp:.*|\1terraacr2025prod.azurecr.io/myapp:$IMAGE_TAG|" prod/deployment.yaml
+
+          echo "=== AFTER SED: prod/deployment.yaml ==="
+          cat prod/deployment.yaml
+
+          echo "=== GIT DIFF ==="
+          git diff prod/deployment.yaml
+
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           git add prod/deployment.yaml
-          git commit -m "Update image to ${{ env.IMAGE_TAG }}"
-          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
+          git commit -m "Updated image to $IMAGE_TAG" || echo "No changes to commit."
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git || echo "No changes to push."
