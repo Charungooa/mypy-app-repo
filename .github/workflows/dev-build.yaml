@@ -49,7 +49,7 @@ jobs:
             --output table
 
       #
-      # 5) Fetch latest tag that matches vX.Y.Z and increment
+      # 5) Fetch latest tag that matches vX.Y.Z and increment (Fixed Parsing)
       #
       - name: Fetch latest tag from ACR and increment version
         id: versioning
@@ -66,9 +66,9 @@ jobs:
           [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
 
           echo "=== Debugging regex parsing ==="
-          MAJOR=$(echo "$LATEST_TAG" | grep -oP '(?<=v)[0-9]+' || echo "0")
-          MINOR=$(echo "$LATEST_TAG" | grep -oP '(?<=v[0-9]+\.)[0-9]+' || echo "0")
-          PATCH=$(echo "$LATEST_TAG" | grep -oP '(?<=v[0-9]+\.[0-9]+\.)[0-9]+' || echo "0")
+          MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
+          MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
+          PATCH=$(echo "$LATEST_TAG" | awk -F. '{print $3}')
 
           echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
 
@@ -93,12 +93,12 @@ jobs:
       #
       - name: Clone Flux GitOps repository
         run: |
-          git clone --branch main --single-branch \
+          git clone --branch dev --single-branch \
             https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
             flux-repo
 
       #
-      # 8) Debug: Show deployment.yaml before/after sed
+      # 8) Debug: Show deployment.yaml before/after sed (Fixed `sed`)
       #
       - name: Debug sed
         run: |
@@ -107,7 +107,7 @@ jobs:
           cat dev/deployment.yaml
 
           echo "=== Running sed to update image tag ==="
-          sed -i "s|image: terraacr2025dev.azurecr.io/myapp:.*|image: terraacr2025dev.azurecr.io/myapp:$IMAGE_TAG|" dev/deployment.yaml
+          sed -i "s|^\(\s*image:\s*\)terraacr2025dev.azurecr.io/myapp:.*|\1terraacr2025dev.azurecr.io/myapp:$IMAGE_TAG|" dev/deployment.yaml
 
           echo "=== AFTER SED: dev/deployment.yaml ==="
           cat dev/deployment.yaml
