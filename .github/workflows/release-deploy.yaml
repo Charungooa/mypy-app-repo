@@ -1,42 +1,60 @@
-name: Stage Build and Deploy
+name: Staging Build and Deploy
 
 on:
   push:
     branches:
       - staging
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - closed
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/staging'
+    if: github.ref == 'refs/heads/staging' || github.event.pull_request.merged == true
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-      - name: Log in to Azure Container Registry
+      - name: Log in to Azure Container Registry (Staging)
         run: |
-          echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025stage.azurecr.io -u ${{ secrets.ACR_STAGE_USERNAME }} --password-stdin
+          echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025stage.azurecr.io \
+            -u "${{ secrets.ACR_STAGE_USERNAME }}" --password-stdin
+          az acr login --name terraacr2025stage
 
-      - name: Set Image Tag
-        run: echo "IMAGE_TAG=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV  # Generates a timestamp-based tag
-
-      - name: Build and Push Docker Image to ACR
+      - name: Fetch latest Dev ACR tag
+        id: get_dev_tag
         run: |
-          docker build -t terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
-          docker push terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }}
+          DEV_TAG=$(az acr repository show-tags --name terraacr2025dev \
+                     --repository myapp \
+                     --orderby time_desc \
+                     --output tsv \
+                     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                     | head -n 1)
+          
+          echo "DEV_TAG=$DEV_TAG" >> $GITHUB_ENV
 
-      - name: Update FluxCD GitOps Repository with New Image Tag
+      - name: Pull Dev image and Push to Staging ACR
         run: |
-          git clone https://github.com/charungooa/flux-gitops02.git
-          cd flux-gitops02
+          docker pull terraacr2025dev.azurecr.io/myapp:$DEV_TAG
+          docker tag terraacr2025dev.azurecr.io/myapp:$DEV_TAG terraacr2025stage.azurecr.io/myapp:$DEV_TAG
+          docker push terraacr2025stage.azurecr.io/myapp:$DEV_TAG
 
-          # Update deployment.yaml with the new image tag
-          sed -i 's|image: terraacr2025stage.azurecr.io/myapp:.*|image: terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' staging/deployment.yaml
+      - name: Update FluxCD GitOps Repository (Staging)
+        run: |
+          git clone --branch staging --single-branch \
+            https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
+            flux-repo
 
-          # Commit and Push Changes
+          cd flux-repo
+          sed -i "s|^\(\s*image:\s*\)terraacr2025stage.azurecr.io/myapp:.*|\1terraacr2025stage.azurecr.io/myapp:$DEV_TAG|" staging/deployment.yaml
+
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           git add staging/deployment.yaml
-          git commit -m "Update image to ${{ env.IMAGE_TAG }}"
+          git commit -m "Updated image to $DEV_TAG"
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
