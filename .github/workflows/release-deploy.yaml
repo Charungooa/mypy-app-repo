@@ -74,7 +74,7 @@ jobs:
 
       - name: Update FluxCD GitOps Repository (Debugging)
         run: |
-          git clone --branch staging --single-branch \
+          git clone --branch main --single-branch \
             https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
             flux-repo
 
