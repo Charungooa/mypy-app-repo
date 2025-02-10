@@ -10,65 +10,112 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/dev'
     steps:
+      #
+      # 1) Checkout the repo (the app’s source code)
+      #
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      # 1) Log in to Azure CLI with a Service Principal
+      #
+      # 2) Log in to Azure CLI (Service Principal)
+      #
       - name: Azure CLI Login
         run: |
           az login --service-principal \
-            -u ${{ secrets.AZURE_CLIENT_ID }} \
-            -p ${{ secrets.AZURE_CLIENT_SECRET }} \
-            --tenant ${{ secrets.AZURE_TENANT_ID }}
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
-      # 2) (Optional) ACR Login (sometimes helpful)
+      #
+      # 3) Optional: Log in to ACR (both Docker + CLI)
+      #
       - name: Log in to Azure Container Registry (Docker + ACR)
         run: |
           # Docker login
           echo "${{ secrets.ACR_DEV_PASSWORD }}" | docker login terraacr2025dev.azurecr.io \
-            -u ${{ secrets.ACR_DEV_USERNAME }} --password-stdin
+            -u "${{ secrets.ACR_DEV_USERNAME }}" \
+            --password-stdin
 
-          # Azure CLI-based login to ACR
+          # Azure CLI-based ACR login
           az acr login --name terraacr2025dev
 
-      # 3) Fetch latest tag from ACR, increment version
+      #
+      # 4) Debug step: Show all tags in ACR (no grep),
+      #    to confirm that we *do* have something like v0.0.1, v0.0.2, etc.
+      #
+      - name: Debug - Show ACR tags
+        run: |
+          echo "=== All tags for 'myapp' in ACR (unfiltered) ==="
+          az acr repository show-tags --name terraacr2025dev \
+            --repository myapp \
+            --orderby time_desc \
+            --output table
+
+      #
+      # 5) Fetch latest tag that matches vX.Y.Z and increment
+      #
       - name: Fetch latest tag from ACR and increment version
         id: versioning
         run: |
-          # Retrieve last pushed tag that looks like vX.Y.Z
+          echo "=== Fetching latest vX.Y.Z tag ==="
           LATEST_TAG=$(az acr repository show-tags --name terraacr2025dev \
                        --repository myapp \
-                       --orderby time_desc --output tsv \
+                       --orderby time_desc \
+                       --output tsv \
                        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
                        | head -n 1)
 
           echo "Latest tag from ACR: $LATEST_TAG"
           [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
 
-          MAJOR=$(echo $LATEST_TAG | grep -oP '(?<=v)[0-9]+' || echo "0")
-          MINOR=$(echo $LATEST_TAG | grep -oP '(?<=v[0-9]+\.)[0-9]+' || echo "0")
-          PATCH=$(echo $LATEST_TAG | grep -oP '(?<=v[0-9]+\.[0-9]+\.)[0-9]+' || echo "0")
+          MAJOR=$(echo "$LATEST_TAG" | grep -oP '(?<=v)[0-9]+' || echo "0")
+          MINOR=$(echo "$LATEST_TAG" | grep -oP '(?<=v[0-9]+\.)[0-9]+' || echo "0")
+          PATCH=$(echo "$LATEST_TAG" | grep -oP '(?<=v[0-9]+\.[0-9]+\.)[0-9]+' || echo "0")
 
           NEW_PATCH=$((PATCH + 1))
           IMAGE_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-      # 4) Build and push Docker image
+      #
+      # 6) Build and push Docker image with the new $IMAGE_TAG
+      #
       - name: Build and push Docker image
         run: |
           docker build -t terraacr2025dev.azurecr.io/myapp:$IMAGE_TAG .
           docker push terraacr2025dev.azurecr.io/myapp:$IMAGE_TAG
 
-      # 5) Clone and update Flux GitOps repository
-      - name: Clone and update Flux GitOps repository
+      #
+      # 7) Clone Flux GitOps repo (which has dev/deployment.yaml)
+      #
+      - name: Clone Flux GitOps repository
         run: |
-          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git flux-repo
+          git clone \
+            https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
+            flux-repo
+
+      #
+      # 8) Debug: Show the YAML before/after sed + git diff
+      #
+      - name: Debug sed
+        run: |
           cd flux-repo
+          echo "=== BEFORE SED: dev/deployment.yaml ==="
+          cat dev/deployment.yaml
+
+          echo "=== Running sed to update image tag ==="
           sed -i "s|image: terraacr2025dev.azurecr.io/myapp:.*|image: terraacr2025dev.azurecr.io/myapp:$IMAGE_TAG|" dev/deployment.yaml
 
-      # 6) Commit and push updated image version
+          echo "=== AFTER SED: dev/deployment.yaml ==="
+          cat dev/deployment.yaml
+
+          echo "=== GIT DIFF ==="
+          git diff dev/deployment.yaml
+
+      #
+      # 9) Commit + Push updated dev/deployment.yaml if changed
+      #
       - name: Commit and push updated image version to Flux GitOps repository
         run: |
           cd flux-repo
@@ -76,4 +123,6 @@ jobs:
           git config --global user.name "GitHub Actions"
           git add dev/deployment.yaml
           git commit -m "Updated image to $IMAGE_TAG" || echo "No changes to commit."
-          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git || echo "No changes to push."
+          git push \
+            https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
+            || echo "No changes to push."
