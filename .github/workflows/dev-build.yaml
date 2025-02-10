@@ -58,5 +58,9 @@ jobs:
 
       - name: Create Git Tag for New Version
         run: |
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+
           git tag ${{ env.NEW_VERSION }}
+          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/mypy-app-repo.git
           git push origin ${{ env.NEW_VERSION }}
