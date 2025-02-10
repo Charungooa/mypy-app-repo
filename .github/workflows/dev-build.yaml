@@ -72,3 +72,4 @@ jobs:
           # Tag the new version and push
           git tag $NEW_VERSION
           # git push origin $NEW_VERSION || (echo "ERROR: Failed to push tag $NEW_VERSION" && exit 1)
+          git push origin $NEW_VERSION https://x-access-token:${{ secrets.GH_PAT1 }}@github.com/charungooa/mypy-app-repo.git
