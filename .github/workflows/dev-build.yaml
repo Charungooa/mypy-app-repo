@@ -1,82 +1,59 @@
-name: Dev Build and Deploy
+name: Dev CI/CD Pipeline
 
 on:
   push:
     branches:
       - dev
-  workflow_dispatch:
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/dev'
     steps:
-      - name: Checkout code
+      #
+      # 1) Checkout the main app repository
+      #
+      - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0  # Ensures all tags are fetched
-      - name: Azure CLI Login
-        run: |
-          az login --service-principal \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
       - name: Log in to Azure Container Registry
         run: |
           echo "${{ secrets.ACR_DEV_PASSWORD }}" | docker login terraacr2025dev.azurecr.io -u ${{ secrets.ACR_DEV_USERNAME }} --password-stdin
 
-      - name: Get Latest Version Tag
-        id: get_version
-        run: |
-          # Get latest version tag, fallback to 0.0.0 if none exist
-          LATEST_TAG=$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-
-      - name: Increment Version (PATCH)
-        id: versioning
-        run: |
-          # Extract MAJOR, MINOR, PATCH
-          VERSION=${{ env.LATEST_TAG }}
-          MAJOR=$(echo $VERSION | cut -d. -f1 | sed 's/v//')
-          MINOR=$(echo $VERSION | cut -d. -f2)
-          PATCH=$(echo $VERSION | cut -d. -f3)
-
-          # Increment PATCH version
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-
-          # Store new version
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-
-      - name: Handle PR Versioning
-        if: github.event_name == 'pull_request'
-        run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          NEW_VERSION="${{ env.NEW_VERSION }}-PR${PR_NUMBER}"
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+      - name: Set Image Tag
+        run: echo "IMAGE_TAG=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV  # Generates a timestamp-based tag
 
       - name: Build and Push Docker Image to ACR
         run: |
-          docker build -t terraacr2025dev.azurecr.io/myapp:${{ env.NEW_VERSION }} .
-          docker push terraacr2025dev.azurecr.io/myapp:${{ env.NEW_VERSION }}
+          docker build -t terraacr2025dev.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
+          docker push terraacr2025dev.azurecr.io/myapp:${{ env.IMAGE_TAG }}
 
-      - name: Update FluxCD GitOps Repository with New Image Tag
+      #
+      # 8) Debug: Show deployment.yaml before/after sed (Fixed `sed`)
+      #
+      - name: Debug sed
         run: |
           git clone https://github.com/charungooa/flux-gitops02.git
           cd flux-gitops02
 
           # Update deployment.yaml with the new image tag
-          sed -i 's|image: terraacr2025dev.azurecr.io/myapp:.*|image: terraacr2025dev.azurecr.io/myapp:${{ env.NEW_VERSION }}|' dev/deployment.yaml
+          sed -i 's|image: terraacr2025dev.azurecr.io/myapp:.*|image: terraacr2025dev.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' dev/deployment.yaml
 
-          # Commit and Push Changes
+          echo "=== AFTER SED: dev/deployment.yaml ==="
+          cat dev/deployment.yaml
+
+          echo "=== GIT DIFF ==="
+          git diff dev/deployment.yaml
+
+      #
+      # 9) Commit and push updated image version to Flux GitOps repository
+      #
+      - name: Commit and push updated image version to Flux GitOps repository
+        run: |
+          cd flux-repo
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
-          git add dev/deployment.yaml
-          git commit -m "Update image to ${{ env.NEW_VERSION }}"
-          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
 
-      - name: Create Git Tag for New Version
-        run: |
-          git tag ${{ env.NEW_VERSION }}
-          git push origin ${{ env.NEW_VERSION }}
+          git add dev/deployment.yaml
+          git commit -m "Update image to ${{ env.IMAGE_TAG }}"
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
