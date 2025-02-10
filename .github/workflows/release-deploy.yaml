@@ -19,15 +19,6 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      
-      # 2) Log in to Azure CLI (Service Principal)
-      #
-      - name: Azure CLI Login
-        run: |
-          az login --service-principal \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
       - name: Log in to Azure Container Registry (Staging)
         run: |
@@ -35,23 +26,32 @@ jobs:
             -u "${{ secrets.ACR_STAGE_USERNAME }}" --password-stdin
           az acr login --name terraacr2025stage
 
-      - name: Fetch latest Dev ACR tag
-        id: get_dev_tag
+      - name: Fetch latest image tag from Staging ACR
+        id: versioning
         run: |
-          DEV_TAG=$(az acr repository show-tags --name terraacr2025dev \
-                     --repository myapp \
-                     --orderby time_desc \
-                     --output tsv \
-                     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-                     | head -n 1)
-          
-          echo "DEV_TAG=$DEV_TAG" >> $GITHUB_ENV
+          LATEST_TAG=$(az acr repository show-tags --name terraacr2025stage \
+                      --repository myapp \
+                      --orderby time_desc \
+                      --output tsv \
+                      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                      | head -n 1)
 
-      - name: Pull Dev image and Push to Staging ACR
+          [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
+
+          MAJOR=$(echo "$LATEST_TAG" | grep -oP '(?<=v)[0-9]+' || echo "0")
+          MINOR=$(echo "$LATEST_TAG" | grep -oP '(?<=v[0-9]+\.)[0-9]+' || echo "0")
+          PATCH=$(echo "$LATEST_TAG" | grep -oP '(?<=v[0-9]+\.[0-9]+\.)[0-9]+' || echo "0")
+
+          NEW_PATCH=$((PATCH + 1))
+          IMAGE_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "New Staging Image Tag: $IMAGE_TAG"
+
+      - name: Build and Push Docker Image to Staging ACR
         run: |
-          docker pull terraacr2025dev.azurecr.io/myapp:$DEV_TAG
-          docker tag terraacr2025dev.azurecr.io/myapp:$DEV_TAG terraacr2025stage.azurecr.io/myapp:$DEV_TAG
-          docker push terraacr2025stage.azurecr.io/myapp:$DEV_TAG
+          docker build -t terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG .
+          docker push terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG
 
       - name: Update FluxCD GitOps Repository (Staging)
         run: |
@@ -60,10 +60,10 @@ jobs:
             flux-repo
 
           cd flux-repo
-          sed -i "s|^\(\s*image:\s*\)terraacr2025stage.azurecr.io/myapp:.*|\1terraacr2025stage.azurecr.io/myapp:$DEV_TAG|" staging/deployment.yaml
+          sed -i "s|^\(\s*image:\s*\)terraacr2025stage.azurecr.io/myapp:.*|\1terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG|" staging/deployment.yaml
 
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           git add staging/deployment.yaml
-          git commit -m "Updated image to $DEV_TAG"
+          git commit -m "Updated image to $IMAGE_TAG"
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
