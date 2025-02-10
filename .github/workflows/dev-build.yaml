@@ -43,8 +43,8 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          docker build -t ${{ secrets.ACR_DEV_USERNAME }}/myapp:$NEW_VERSION .
-          docker push ${{ secrets.ACR_DEV_USERNAME }}/myapp:$NEW_VERSION
+          docker build -t ${{ secrets.ACR_DEV_USERNAME }}.azurecr.io/myapp:$NEW_VERSION .
+          docker push ${{ secrets.ACR_DEV_USERNAME }}.azurecr.io/myapp:$NEW_VERSION
 
       - name: Clone Flux GitOps repository
         run: |
