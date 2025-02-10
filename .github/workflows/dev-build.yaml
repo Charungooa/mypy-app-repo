@@ -93,7 +93,7 @@ jobs:
       #
       - name: Clone Flux GitOps repository
         run: |
-          git clone --branch dev --single-branch \
+          git clone --branch main --single-branch \
             https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
             flux-repo
 
