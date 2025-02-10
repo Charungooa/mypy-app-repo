@@ -1,42 +1,99 @@
-name: Stage Build and Deploy
+name: Staging Build and Deploy
 
 on:
   push:
     branches:
       - staging
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - closed
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/staging'
+    if: github.ref == 'refs/heads/staging' || github.event.pull_request.merged == true
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Log in to Azure Container Registry
+        with:
+          fetch-depth: 0
+      
+      - name: Azure CLI Login
         run: |
-          echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025stage.azurecr.io -u ${{ secrets.ACR_STAGE_USERNAME }} --password-stdin
+          az login --service-principal \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
-      - name: Set Image Tag
-        run: echo "IMAGE_TAG=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV  # Generates a timestamp-based tag
-
-      - name: Build and Push Docker Image to ACR
+      - name: Log in to Azure Container Registry (Staging)
         run: |
-          docker build -t terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
-          docker push terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }}
+          echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025stage.azurecr.io \
+            -u "${{ secrets.ACR_STAGE_USERNAME }}" --password-stdin
+          az acr login --name terraacr2025stage
 
-      - name: Update FluxCD GitOps Repository with New Image Tag
+      - name: Fetch latest image tag from Staging ACR (Debugging)
+        id: versioning
         run: |
-          git clone https://github.com/charungooa/flux-gitops02.git
-          cd flux-gitops02
+          echo "=== Fetching all tags from Staging ACR ==="
+          az acr repository show-tags --name terraacr2025stage --repository myapp --orderby time_desc --output table
 
-          # Update deployment.yaml with the new image tag
-          sed -i 's|image: terraacr2025stage.azurecr.io/myapp:.*|image: terraacr2025stage.azurecr.io/myapp:${{ env.IMAGE_TAG }}|' staging/deployment.yaml
+          echo "=== Fetching latest vX.Y.Z tag ==="
+          LATEST_TAG=$(az acr repository show-tags --name terraacr2025stage \
+                      --repository myapp \
+                      --orderby time_desc \
+                      --output tsv \
+                      | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ {print; exit}')
 
-          # Commit and Push Changes
+          echo "Latest tag from ACR: $LATEST_TAG"
+
+          [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
+
+          echo "=== Debugging tag parsing ==="
+          echo "RAW LATEST_TAG = $LATEST_TAG"
+
+          MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
+          MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
+          PATCH=$(echo "$LATEST_TAG" | awk -F. '{print $3}')
+
+          echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
+
+          # Increment PATCH version
+          NEW_PATCH=$((PATCH + 1))
+          IMAGE_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "NEW image tag (after increment) = $IMAGE_TAG"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image to Staging ACR
+        run: |
+          echo "Using IMAGE_TAG=$IMAGE_TAG"
+          docker build -t terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG .
+          docker push terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG
+
+      - name: Update FluxCD GitOps Repository (Debugging)
+        run: |
+          git clone --branch main --single-branch \
+            https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git \
+            flux-repo
+
+          cd flux-repo
+
+          echo "=== BEFORE SED: staging/deployment.yaml ==="
+          cat staging/deployment.yaml
+
+          echo "=== Running sed to update image tag ==="
+          sed -i "s|^\(\s*image:\s*\)terraacr2025stage.azurecr.io/myapp:.*|\1terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG|" staging/deployment.yaml
+
+          echo "=== AFTER SED: staging/deployment.yaml ==="
+          cat staging/deployment.yaml
+
+          echo "=== GIT DIFF ==="
+          git diff staging/deployment.yaml
+
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           git add staging/deployment.yaml
-          git commit -m "Update image to ${{ env.IMAGE_TAG }}"
-          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git
+          git commit -m "Updated image to $IMAGE_TAG" || echo "No changes to commit."
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git || echo "No changes to push."
