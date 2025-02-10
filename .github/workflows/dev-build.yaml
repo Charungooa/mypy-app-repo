@@ -50,7 +50,7 @@ jobs:
         run: |
           git clone https://github.com/charungooa/flux-gitops02.git flux-repo
           cd flux-repo
-          sed -i "s|image: ${{ secrets.ACR_DEV_USERNAME }}/myapp:.*|image: ${{ secrets.ACR_DEV_USERNAME }}/myapp:$NEW_VERSION|" dev/deployment.yaml
+          sed -i "s|image: ${{ secrets.ACR_DEV_USERNAME }}.azurecr.io/myapp:.*|image: ${{ secrets.ACR_DEV_USERNAME }}.azurecr.io/myapp:$NEW_VERSION|" dev/deployment.yaml
 
       - name: Commit and push updated image version to Flux GitOps repository
         run: |
