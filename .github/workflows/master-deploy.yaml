@@ -29,10 +29,17 @@ jobs:
           echo "${{ secrets.ACR_PROD_PASSWORD }}" | docker login terraacr2025prod.azurecr.io \
             -u "${{ secrets.ACR_PROD_USERNAME }}" --password-stdin
           az acr login --name terraacr2025prod
-
-      - name: Fetch latest image tag from Prod ACR (Debugging)
+    
+      - name: Ensure Repository Exists & Fetch Latest Tag
         id: versioning
         run: |
+          echo "=== Checking if repository 'myapp' exists in ACR ==="
+          if ! az acr repository show --name terraacr2025prod --repository myapp >/dev/null 2>&1; then
+            echo "Repository 'myapp' does not exist. Creating it with a placeholder image."
+            docker build -t terraacr2025prod.azurecr.io/myapp:v0.0.1 .
+            docker push terraacr2025prod.azurecr.io/myapp:v0.0.1
+          fi
+
           echo "=== Fetching all tags from Prod ACR ==="
           az acr repository show-tags --name terraacr2025prod --repository myapp --orderby time_desc --output table
 
@@ -62,7 +69,7 @@ jobs:
 
           echo "NEW image tag (after increment) = $IMAGE_TAG"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-
+    
       - name: Build and Push Docker Image to Prod ACR
         run: |
           echo "Using IMAGE_TAG=$IMAGE_TAG"
