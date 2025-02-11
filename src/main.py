@@ -4,6 +4,6 @@ app = Flask(__name__)
 
 @app.route("/")
 def hello():
-    return "Hello from MyApp to you - Dev-staging-prod environment!!... ...00 - v3.4.10- used a newer way to update the version taging and updating the vversion detection to major, minor and patch, updated the labels in repo"
+    return "Hello from MyApp to you - Dev-staging-prod environment!!... ...00 - v3.4.10- used a newer way to build the image and update PR labels"
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
