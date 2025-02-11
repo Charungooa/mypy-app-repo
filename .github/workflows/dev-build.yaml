@@ -49,17 +49,22 @@ jobs:
             --output table
 
       #
-      # 5) Determine version type (major, minor, patch)
+      # 5) Determine version type (major, minor, patch) using GitHub API
       #
       - name: Determine Version Type
         id: version_type
         run: |
           VERSION_TYPE="patch"  # Default
 
-          # Check PR labels (if any)
-          if [[ "${{ github.event.pull_request.labels }}" == *"major"* ]]; then
+          # Fetch PR labels using GitHub API
+          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name')
+          
+          echo "Detected PR Labels: $PR_LABELS"
+
+          # Check PR labels for versioning
+          if echo "$PR_LABELS" | grep -q "major"; then
             VERSION_TYPE="major"
-          elif [[ "${{ github.event.pull_request.labels }}" == *"minor"* ]]; then
+          elif echo "$PR_LABELS" | grep -q "minor"; then
             VERSION_TYPE="minor"
           fi
 
