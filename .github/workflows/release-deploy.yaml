@@ -17,17 +17,27 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # Provide GH_TOKEN so gh CLI is authenticated
+
+    # Expose a GH_TOKEN so the 'gh' CLI can authenticate
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # If you really want to run this job only when a push occurs on staging
+    # or a PR is closed (merged) to staging, you can keep this 'if' statement.
     if: github.ref == 'refs/heads/staging' || github.event.pull_request.merged == true
 
     steps:
+      #
+      # 1) Check out source code
+      #
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
+      #
+      # 2) Azure CLI Login
+      #
       - name: Azure CLI Login
         run: |
           az login --service-principal \
@@ -35,6 +45,9 @@ jobs:
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
+      #
+      # 3) Log in to ACR (staging)
+      #
       - name: Log in to Azure Container Registry (Staging)
         run: |
           echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025stage.azurecr.io \
@@ -42,65 +55,68 @@ jobs:
           az acr login --name terraacr2025stage
 
       #
-      # 1) Determine Version Type (major, minor, patch) using PR labels or commit messages
+      # 4) Determine Version Type (major, minor, patch) by parsing commit & PR labels
       #
       - name: Determine Version Type
         id: version_type
         run: |
-          # Default to "patch" if not a merged PR
-          VERSION_TYPE="patch"
+          VERSION_TYPE="patch"  # default
 
-          # Only attempt to read PR labels if this is a merged PR event
-          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" ]]; then
-            echo "Pull Request merge detected. Checking labels..."
+          # 1) Get the most recent commit message on 'staging'
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Latest commit message:"
+          echo "$COMMIT_MSG"
 
-            PR_NUMBER="${{ github.event.pull_request.number }}"
-            PR_LABELS=$(gh pr view "$PR_NUMBER" --json labels -q '.labels[].name')
+          # 2) Extract PR number from typical merge commit format: "Merge pull request #XX from <branch>"
+          PR_NUMBER=$(echo "$COMMIT_MSG" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+')
 
-            echo "Detected PR Labels: $PR_LABELS"
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Detected a merged PR #$PR_NUMBER. Checking labels with gh CLI..."
+            PR_LABELS=$(gh pr view "$PR_NUMBER" --json labels -q '.labels[].name' || true)
+            echo "PR Labels: $PR_LABELS"
 
-            # Check PR labels first
+            # If label "major" or "minor" is found, set accordingly
             if echo "$PR_LABELS" | grep -q "major"; then
               VERSION_TYPE="major"
             elif echo "$PR_LABELS" | grep -q "minor"; then
               VERSION_TYPE="minor"
-            fi
-
-            # If still patch, check commit messages for keywords
-            if [[ "$VERSION_TYPE" == "patch" ]]; then
-              COMMIT_MSG=$(git log -1 --pretty=%B)
-
+            else
+              # If no major/minor label, optionally check commit for keywords
               if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
                 VERSION_TYPE="major"
               elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
                 VERSION_TYPE="minor"
               fi
             fi
-
           else
-            echo "No merged PR detected. Defaulting VERSION_TYPE to 'patch'."
+            echo "No merged PR reference found in commit message. Defaulting to patch..."
+            # Optionally check commit message for keywords:
+            if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
+              VERSION_TYPE="major"
+            elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
+              VERSION_TYPE="minor"
+            fi
           fi
 
           echo "VERSION_TYPE=$VERSION_TYPE" >> $GITHUB_ENV
           echo "Version Type: $VERSION_TYPE"
 
       #
-      # 2) Fetch latest tag from Staging ACR and increment version
+      # 5) Fetch latest image tag from Staging ACR and increment
       #
-      - name: Fetch latest image tag from Staging ACR
+      - name: Fetch latest image tag from Staging ACR (Debugging)
         id: versioning
         run: |
-          echo "=== Fetching all tags from Staging ACR (debug info) ==="
+          echo "=== Fetching all tags from Staging ACR (for debugging) ==="
           az acr repository show-tags --name terraacr2025stage --repository myapp --orderby time_desc --output table || true
 
           echo "=== Fetching latest vX.Y.Z tag ==="
-          LATEST_TAG=$(az acr repository show-tags --name terraacr2025stage \
-                       --repository myapp \
-                       --orderby time_desc \
-                       --output tsv 2>/dev/null || true)
-
+          ALL_TAGS=$(az acr repository show-tags --name terraacr2025stage \
+                      --repository myapp \
+                      --orderby time_desc \
+                      --output tsv 2>/dev/null || true)
           # Filter only tags matching vX.Y.Z
-          LATEST_TAG=$(echo "$LATEST_TAG" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          LATEST_TAG=$(echo "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
 
           if [ -z "$LATEST_TAG" ]; then
             echo "'myapp' repository not found or no valid tags. Starting at v0.0.0."
@@ -109,14 +125,13 @@ jobs:
 
           echo "Latest tag from ACR: $LATEST_TAG"
 
-          # Extract version numbers
           MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
           MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
           PATCH=$(echo "$LATEST_TAG" | awk -F. '{print $3}')
 
           echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
 
-          # Read VERSION_TYPE from environment
+          # Use the VERSION_TYPE from the previous step
           case "${VERSION_TYPE}" in
             major)
               MAJOR=$((MAJOR + 1))
@@ -137,16 +152,16 @@ jobs:
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
       #
-      # 3) Build and Push Docker Image to Staging ACR
+      # 6) Build and Push Docker Image to Staging ACR
       #
-      - name: Build and Push Docker Image to Staging ACR
+      - name: Build and Push Docker Image
         run: |
           echo "Using IMAGE_TAG=$IMAGE_TAG"
           docker build -t terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG .
           docker push terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG
 
       #
-      # 4) Update FluxCD GitOps Repository
+      # 7) Update FluxCD GitOps Repository
       #
       - name: Update FluxCD GitOps Repository (Debugging)
         run: |
