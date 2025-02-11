@@ -49,16 +49,18 @@ jobs:
             --output table
 
       #
-      # 5) Determine version type (major, minor, patch) using GitHub API
+      # 5) Determine version type (major, minor, patch)
       #
       - name: Determine Version Type
         id: version_type
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}  # Use the custom GitHub token for authentication
         run: |
           VERSION_TYPE="patch"  # Default
 
-          # Fetch PR labels using GitHub API
-          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name')
-          
+          # Fetch PR labels using GitHub API (GH CLI)
+          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' || echo "")
+
           echo "Detected PR Labels: $PR_LABELS"
 
           # Check PR labels for versioning
