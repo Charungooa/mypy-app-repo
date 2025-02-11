@@ -1,5 +1,10 @@
 name: Dev CI/CD Pipeline
 
+# Grant read permissions so that 'gh pr view' can fetch PR data
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   push:
     branches:
@@ -8,6 +13,9 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Provide GH_TOKEN to the 'gh' CLI by mapping it to the built-in GITHUB_TOKEN
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     if: github.ref == 'refs/heads/dev'
     steps:
       #
@@ -61,9 +69,9 @@ jobs:
         run: |
           VERSION_TYPE="patch"  # Default
 
-          # Fetch PR labels using GitHub CLI
+          # Fetch PR labels using GitHub CLI (requires GH_TOKEN)
           PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name')
-          
+
           echo "Detected PR Labels: $PR_LABELS"
 
           # Check PR labels first
