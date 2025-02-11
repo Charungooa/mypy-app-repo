@@ -22,8 +22,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # If you really want to run this job only when a push occurs on staging
-    # or a PR is closed (merged) to staging, you can keep this 'if' statement.
+    # If you want to run this job only when a push occurs on 'staging' or a merged PR triggers a push:
     if: github.ref == 'refs/heads/staging' || github.event.pull_request.merged == true
 
     steps:
@@ -55,7 +54,7 @@ jobs:
           az acr login --name terraacr2025stage
 
       #
-      # 4) Determine Version Type (major, minor, patch) by parsing commit & PR labels
+      # 4) Determine Version Type (major, minor, patch) safely
       #
       - name: Determine Version Type
         id: version_type
@@ -64,24 +63,26 @@ jobs:
 
           # 1) Get the most recent commit message on 'staging'
           COMMIT_MSG=$(git log -1 --pretty=%B)
-          echo "Latest commit message:"
-          echo "$COMMIT_MSG"
+          echo "Latest commit message: $COMMIT_MSG"
 
           # 2) Extract PR number from typical merge commit format: "Merge pull request #XX from <branch>"
-          PR_NUMBER=$(echo "$COMMIT_MSG" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+')
+          #    Use '|| true' so grep failing to find a match doesn't kill the script under set -e
+          PR_NUMBER=$(echo "$COMMIT_MSG" \
+            | grep -oE 'Merge pull request #[0-9]+' \
+            | grep -oE '[0-9]+' || true)
 
           if [ -n "$PR_NUMBER" ]; then
             echo "Detected a merged PR #$PR_NUMBER. Checking labels with gh CLI..."
             PR_LABELS=$(gh pr view "$PR_NUMBER" --json labels -q '.labels[].name' || true)
             echo "PR Labels: $PR_LABELS"
 
-            # If label "major" or "minor" is found, set accordingly
+            # Check for "major" or "minor" safely
             if echo "$PR_LABELS" | grep -q "major"; then
               VERSION_TYPE="major"
             elif echo "$PR_LABELS" | grep -q "minor"; then
               VERSION_TYPE="minor"
             else
-              # If no major/minor label, optionally check commit for keywords
+              # Optionally check commit for special keywords
               if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
                 VERSION_TYPE="major"
               elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
@@ -90,7 +91,8 @@ jobs:
             fi
           else
             echo "No merged PR reference found in commit message. Defaulting to patch..."
-            # Optionally check commit message for keywords:
+
+            # Optionally check commit for keywords
             if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
               VERSION_TYPE="major"
             elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
