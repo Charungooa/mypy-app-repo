@@ -49,7 +49,36 @@ jobs:
             --output table
 
       #
-      # 5) Fetch latest tag that matches vX.Y.Z and increment (Fixed Parsing)
+      # 5) Determine version type (major, minor, patch)
+      #
+      - name: Determine Version Type
+        id: version_type
+        run: |
+          VERSION_TYPE="patch"  # Default
+
+          # Check PR labels (if any)
+          if [[ "${{ github.event.pull_request.labels }}" == *"major"* ]]; then
+            VERSION_TYPE="major"
+          elif [[ "${{ github.event.pull_request.labels }}" == *"minor"* ]]; then
+            VERSION_TYPE="minor"
+          fi
+
+          # Check commit messages if no PR labels were found
+          if [[ "$VERSION_TYPE" == "patch" ]]; then
+            COMMIT_MSG=$(git log -1 --pretty=%B)
+
+            if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
+              VERSION_TYPE="major"
+            elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
+              VERSION_TYPE="minor"
+            fi
+          fi
+
+          echo "VERSION_TYPE=$VERSION_TYPE" >> $GITHUB_ENV
+          echo "Version Type: $VERSION_TYPE"
+
+      #
+      # 6) Fetch latest tag from ACR and increment version accordingly
       #
       - name: Fetch latest tag from ACR and increment version
         id: versioning
@@ -72,15 +101,25 @@ jobs:
 
           echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
 
-          # Increment PATCH version
-          NEW_PATCH=$((PATCH + 1))
-          IMAGE_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          # Increment based on determined version type
+          if [[ "$VERSION_TYPE" == "major" ]]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [[ "$VERSION_TYPE" == "minor" ]]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          IMAGE_TAG="v${MAJOR}.${MINOR}.${PATCH}"
 
           echo "NEW image tag (after increment) = $IMAGE_TAG"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
       #
-      # 6) Build and push Docker image using new IMAGE_TAG
+      # 7) Build and push Docker image using new IMAGE_TAG
       #
       - name: Build and push Docker image
         run: |
@@ -89,7 +128,7 @@ jobs:
           docker push terraacr2025dev.azurecr.io/myapp:$IMAGE_TAG
 
       #
-      # 7) Clone Flux GitOps repository (Ensure correct branch)
+      # 8) Clone Flux GitOps repository (Ensure correct branch)
       #
       - name: Clone Flux GitOps repository
         run: |
@@ -98,7 +137,7 @@ jobs:
             flux-repo
 
       #
-      # 8) Debug: Show deployment.yaml before/after sed (Fixed `sed`)
+      # 9) Debug: Show deployment.yaml before/after sed (Fixed `sed` syntax)
       #
       - name: Debug sed
         run: |
@@ -116,7 +155,7 @@ jobs:
           git diff dev/deployment.yaml
 
       #
-      # 9) Commit and push updated image version to Flux GitOps repository
+      # 10) Commit and push updated image version to Flux GitOps repository
       #
       - name: Commit and push updated image version to Flux GitOps repository
         run: |
