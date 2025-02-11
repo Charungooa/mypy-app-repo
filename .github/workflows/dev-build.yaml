@@ -1,6 +1,5 @@
 name: Dev CI/CD Pipeline
 
-# Grant read permissions so that 'gh pr view' can fetch PR data
 permissions:
   contents: read
   pull-requests: read
@@ -13,10 +12,9 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # Provide GH_TOKEN to the 'gh' CLI by mapping it to the built-in GITHUB_TOKEN
+    if: github.ref == 'refs/heads/dev'
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    if: github.ref == 'refs/heads/dev'
     steps:
       #
       # 1) Checkout the main app repository
@@ -62,7 +60,7 @@ jobs:
           fi
 
       #
-      # 5) Determine version type (major, minor, patch) using GitHub API
+      # 5) Determine version type (major, minor, patch)
       #
       - name: Determine Version Type
         id: version_type
@@ -70,7 +68,7 @@ jobs:
           VERSION_TYPE="patch"  # Default
 
           # Fetch PR labels using GitHub CLI (requires GH_TOKEN)
-          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name')
+          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' || true)
 
           echo "Detected PR Labels: $PR_LABELS"
 
@@ -81,7 +79,7 @@ jobs:
             VERSION_TYPE="minor"
           fi
 
-          # Check commit messages if no PR labels were found
+          # If still patch, check commit message for optional keywords
           if [[ "$VERSION_TYPE" == "patch" ]]; then
             COMMIT_MSG=$(git log -1 --pretty=%B)
 
@@ -96,23 +94,21 @@ jobs:
           echo "Version Type: $VERSION_TYPE"
 
       #
-      # 6) Fetch latest tag from ACR and increment version accordingly
+      # 6) Fetch latest tag from ACR and increment version
       #
+      - name: Fetch latest tag from ACR and increment version
         id: versioning
         run: |
           echo "=== Fetching latest vX.Y.Z tag ==="
-          # 2>/dev/null || true -> Prevents job failure if repo is missing
           LATEST_TAG=$(az acr repository show-tags --name terraacr2025dev \
-                       --repository myapp \
-                       --orderby time_desc \
-                       --output tsv 2>/dev/null || true)
-
-          if [ -z "$LATEST_TAG" ]; then
-            echo "'myapp' repository not found or no tags exist. Starting at v0.0.0."
-            LATEST_TAG="v0.0.0"
-          fi
+                        --repository myapp \
+                        --orderby time_desc \
+                        --output tsv 2>/dev/null \
+                        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                        | head -n 1)
 
           echo "Latest tag from ACR: $LATEST_TAG"
+          [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
 
           echo "=== Debugging regex parsing ==="
           MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
@@ -137,43 +133,6 @@ jobs:
           echo "NEW image tag (after increment) = $IMAGE_TAG"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Fetch latest tag from ACR and increment version
-        id: versioning
-        run: |
-          echo "=== Fetching latest vX.Y.Z tag ==="
-          LATEST_TAG=$(az acr repository show-tags --name terraacr2025dev \
-                        --repository myapp \
-                        --orderby time_desc \
-                        --output tsv 2>/dev/null \
-                        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-                        | head -n 1)
-      
-          echo "Latest tag from ACR: $LATEST_TAG"
-          [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
-      
-          echo "=== Debugging regex parsing ==="
-          MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
-          MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
-          PATCH=$(echo "$LATEST_TAG" | awk -F. '{print $3}')
-      
-          echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
-      
-          # Use $VERSION_TYPE from environment or default
-          if [[ "$VERSION_TYPE" == "major" ]]; then
-            MAJOR=$((MAJOR + 1))
-            MINOR=0
-            PATCH=0
-          elif [[ "$VERSION_TYPE" == "minor" ]]; then
-            MINOR=$((MINOR + 1))
-            PATCH=0
-          else
-            PATCH=$((PATCH + 1))
-          fi
-      
-          IMAGE_TAG="v${MAJOR}.${MINOR}.${PATCH}"
-          echo "NEW image tag (after increment) = $IMAGE_TAG"
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-        
       #
       # 7) Build and push Docker image using new IMAGE_TAG
       #
