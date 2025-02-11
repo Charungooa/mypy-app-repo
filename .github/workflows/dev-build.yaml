@@ -1,5 +1,10 @@
 name: Dev CI/CD Pipeline
 
+# Grant read permissions so that 'gh pr view' can fetch PR data
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   push:
     branches:
@@ -8,6 +13,9 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Provide GH_TOKEN to the 'gh' CLI by mapping it to the built-in GITHUB_TOKEN
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     if: github.ref == 'refs/heads/dev'
     steps:
       #
@@ -38,32 +46,35 @@ jobs:
           az acr login --name terraacr2025dev
 
       #
-      # 4) Debug step: Show all tags in ACR before filtering
+      # 4) Debug step: Conditionally show all tags in ACR
       #
-      - name: Debug - Show ACR tags
+      - name: Debug - Show ACR tags (skip if missing)
         run: |
-          echo "=== All tags for 'myapp' in ACR (unfiltered) ==="
-          az acr repository show-tags --name terraacr2025dev \
-            --repository myapp \
-            --orderby time_desc \
-            --output table
+          echo "=== Checking if 'myapp' repository exists... ==="
+          if az acr repository show -n terraacr2025dev --repository myapp 2>/dev/null; then
+            echo "=== All tags for 'myapp' in ACR (unfiltered) ==="
+            az acr repository show-tags --name terraacr2025dev \
+              --repository myapp \
+              --orderby time_desc \
+              --output table
+          else
+            echo "'myapp' repository not found. Skipping tag listing."
+          fi
 
       #
-      # 5) Determine version type (major, minor, patch)
+      # 5) Determine version type (major, minor, patch) using GitHub API
       #
       - name: Determine Version Type
         id: version_type
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}  # Use the custom GitHub token for authentication
         run: |
           VERSION_TYPE="patch"  # Default
 
-          # Fetch PR labels using GitHub API (GH CLI)
-          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' || echo "")
+          # Fetch PR labels using GitHub CLI (requires GH_TOKEN)
+          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name')
 
           echo "Detected PR Labels: $PR_LABELS"
 
-          # Check PR labels for versioning
+          # Check PR labels first
           if echo "$PR_LABELS" | grep -q "major"; then
             VERSION_TYPE="major"
           elif echo "$PR_LABELS" | grep -q "minor"; then
@@ -91,15 +102,18 @@ jobs:
         id: versioning
         run: |
           echo "=== Fetching latest vX.Y.Z tag ==="
+          # 2>/dev/null || true -> Prevents job failure if repo is missing
           LATEST_TAG=$(az acr repository show-tags --name terraacr2025dev \
                        --repository myapp \
                        --orderby time_desc \
-                       --output tsv \
-                       | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-                       | head -n 1)
+                       --output tsv 2>/dev/null || true)
+
+          if [ -z "$LATEST_TAG" ]; then
+            echo "'myapp' repository not found or no tags exist. Starting at v0.0.0."
+            LATEST_TAG="v0.0.0"
+          fi
 
           echo "Latest tag from ACR: $LATEST_TAG"
-          [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
 
           echo "=== Debugging regex parsing ==="
           MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
@@ -108,7 +122,7 @@ jobs:
 
           echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
 
-          # Increment based on determined version type
+          # Use $VERSION_TYPE from environment
           if [[ "$VERSION_TYPE" == "major" ]]; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
@@ -121,7 +135,6 @@ jobs:
           fi
 
           IMAGE_TAG="v${MAJOR}.${MINOR}.${PATCH}"
-
           echo "NEW image tag (after increment) = $IMAGE_TAG"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
@@ -144,7 +157,7 @@ jobs:
             flux-repo
 
       #
-      # 9) Debug: Show deployment.yaml before/after sed (Fixed `sed` syntax)
+      # 9) Debug: Show deployment.yaml before/after sed
       #
       - name: Debug sed
         run: |
