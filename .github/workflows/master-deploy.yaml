@@ -38,16 +38,19 @@ jobs:
       # permissions with just Docker login, you can skip or adjust this.
       #
       - name: Azure CLI Login
-        if: ${{ secrets.AZURE_CLIENT_ID && secrets.AZURE_CLIENT_SECRET && secrets.AZURE_TENANT_ID }}
         run: |
-          echo "Logging into Azure CLI with service principal..."
           az login --service-principal \
             -u "${{ secrets.AZURE_CLIENT_ID }}" \
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
-
-          echo "Logging into ACR (terraacr2025prod)..."
-          az acr login --name terraacr2025prod || echo "Could not ACR login via az CLI."
+      
+      # - name: Log in to Azure Container Registry (Staging)
+      #   run: |
+      #     echo ${{ secrets.ACR_STAGE_PASSWORD }} | docker login terraacr2025prod.azurecr.io \
+      #       -u ${{ secrets.ACR_STAGE_USERNAME }} --password-stdin
+      #     az acr login --name terraacr2025prod
+      #     echo "Logging into ACR (terraacr2025prod)..."
+      #     az acr login --name terraacr2025prod || echo "Could not ACR login via az CLI."
 
       #
       # 3) Docker login to Production ACR
