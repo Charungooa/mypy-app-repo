@@ -34,9 +34,7 @@ jobs:
       # 2) (Optional) Azure CLI Login
       #
       - name: Azure CLI Login
-        if: ${{ secrets.AZURE_CLIENT_ID && secrets.AZURE_CLIENT_SECRET && secrets.AZURE_TENANT_ID }}
         run: |
-          echo "Logging into Azure CLI with service principal..."
           az login --service-principal \
             -u "${{ secrets.AZURE_CLIENT_ID }}" \
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
