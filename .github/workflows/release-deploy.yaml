@@ -1,5 +1,9 @@
 name: Staging Build and Deploy
 
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   push:
     branches:
@@ -13,13 +17,26 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+
+    # Expose a GH_TOKEN so the 'gh' CLI can authenticate
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # If you want to run this job only when a push occurs on 'staging' or a merged PR triggers a push:
     if: github.ref == 'refs/heads/staging' || github.event.pull_request.merged == true
+
     steps:
+      #
+      # 1) Check out source code
+      #
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      
+
+      #
+      # 2) Azure CLI Login
+      #
       - name: Azure CLI Login
         run: |
           az login --service-principal \
@@ -27,31 +44,88 @@ jobs:
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
 
+      #
+      # 3) Log in to ACR (staging)
+      #
       - name: Log in to Azure Container Registry (Staging)
         run: |
           echo "${{ secrets.ACR_STAGE_PASSWORD }}" | docker login terraacr2025stage.azurecr.io \
             -u "${{ secrets.ACR_STAGE_USERNAME }}" --password-stdin
           az acr login --name terraacr2025stage
 
+      #
+      # 4) Determine Version Type (major, minor, patch) safely
+      #
+      - name: Determine Version Type
+        id: version_type
+        run: |
+          VERSION_TYPE="patch"  # default
+
+          # 1) Get the most recent commit message on 'staging'
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Latest commit message: $COMMIT_MSG"
+
+          # 2) Extract PR number from typical merge commit format: "Merge pull request #XX from <branch>"
+          #    Use '|| true' so grep failing to find a match doesn't kill the script under set -e
+          PR_NUMBER=$(echo "$COMMIT_MSG" \
+            | grep -oE 'Merge pull request #[0-9]+' \
+            | grep -oE '[0-9]+' || true)
+
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Detected a merged PR #$PR_NUMBER. Checking labels with gh CLI..."
+            PR_LABELS=$(gh pr view "$PR_NUMBER" --json labels -q '.labels[].name' || true)
+            echo "PR Labels: $PR_LABELS"
+
+            # Check for "major" or "minor" safely
+            if echo "$PR_LABELS" | grep -q "major"; then
+              VERSION_TYPE="major"
+            elif echo "$PR_LABELS" | grep -q "minor"; then
+              VERSION_TYPE="minor"
+            else
+              # Optionally check commit for special keywords
+              if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
+                VERSION_TYPE="major"
+              elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
+                VERSION_TYPE="minor"
+              fi
+            fi
+          else
+            echo "No merged PR reference found in commit message. Defaulting to patch..."
+
+            # Optionally check commit for keywords
+            if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
+              VERSION_TYPE="major"
+            elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
+              VERSION_TYPE="minor"
+            fi
+          fi
+
+          echo "VERSION_TYPE=$VERSION_TYPE" >> $GITHUB_ENV
+          echo "Version Type: $VERSION_TYPE"
+
+      #
+      # 5) Fetch latest image tag from Staging ACR and increment
+      #
       - name: Fetch latest image tag from Staging ACR (Debugging)
         id: versioning
         run: |
-          echo "=== Fetching all tags from Staging ACR ==="
-          az acr repository show-tags --name terraacr2025stage --repository myapp --orderby time_desc --output table
+          echo "=== Fetching all tags from Staging ACR (for debugging) ==="
+          az acr repository show-tags --name terraacr2025stage --repository myapp --orderby time_desc --output table || true
 
           echo "=== Fetching latest vX.Y.Z tag ==="
-          LATEST_TAG=$(az acr repository show-tags --name terraacr2025stage \
+          ALL_TAGS=$(az acr repository show-tags --name terraacr2025stage \
                       --repository myapp \
                       --orderby time_desc \
-                      --output tsv \
-                      | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ {print; exit}')
+                      --output tsv 2>/dev/null || true)
+          # Filter only tags matching vX.Y.Z
+          LATEST_TAG=$(echo "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            echo "'myapp' repository not found or no valid tags. Starting at v0.0.0."
+            LATEST_TAG="v0.0.0"
+          fi
 
           echo "Latest tag from ACR: $LATEST_TAG"
-
-          [[ -z "$LATEST_TAG" ]] && LATEST_TAG="v0.0.0"
-
-          echo "=== Debugging tag parsing ==="
-          echo "RAW LATEST_TAG = $LATEST_TAG"
 
           MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
           MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
@@ -59,19 +133,38 @@ jobs:
 
           echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
 
-          # Increment PATCH version
-          NEW_PATCH=$((PATCH + 1))
-          IMAGE_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          # Use the VERSION_TYPE from the previous step
+          case "${VERSION_TYPE}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch|*)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
 
+          IMAGE_TAG="v${MAJOR}.${MINOR}.${PATCH}"
           echo "NEW image tag (after increment) = $IMAGE_TAG"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Build and Push Docker Image to Staging ACR
+      #
+      # 6) Build and Push Docker Image to Staging ACR
+      #
+      - name: Build and Push Docker Image
         run: |
           echo "Using IMAGE_TAG=$IMAGE_TAG"
           docker build -t terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG .
           docker push terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG
 
+      #
+      # 7) Update FluxCD GitOps Repository
+      #
       - name: Update FluxCD GitOps Repository (Debugging)
         run: |
           git clone --branch main --single-branch \
@@ -81,7 +174,7 @@ jobs:
           cd flux-repo
 
           echo "=== BEFORE SED: staging/deployment.yaml ==="
-          cat staging/deployment.yaml
+          cat staging/deployment.yaml || true
 
           echo "=== Running sed to update image tag ==="
           sed -i "s|^\(\s*image:\s*\)terraacr2025stage.azurecr.io/myapp:.*|\1terraacr2025stage.azurecr.io/myapp:$IMAGE_TAG|" staging/deployment.yaml
@@ -94,6 +187,7 @@ jobs:
 
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
+
           git add staging/deployment.yaml
           git commit -m "Updated image to $IMAGE_TAG" || echo "No changes to commit."
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/charungooa/flux-gitops02.git || echo "No changes to push."
