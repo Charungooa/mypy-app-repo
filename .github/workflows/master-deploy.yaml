@@ -14,11 +14,11 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
-    # Provide GH_TOKEN for 'gh' CLI authentication
+    # Provide GH_TOKEN for 'gh pr view' authentication
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # Only run if we're on the 'main' branch
+    # Only run if we're on the main branch
     if: github.ref == 'refs/heads/main'
 
     steps:
@@ -33,24 +33,17 @@ jobs:
       #
       # 2) (Optional) Azure CLI Login
       #
-      # If you need to use 'az acr repository show-tags' (like we do below),
-      # you must log into Azure CLI and the ACR. If you already have enough
-      # permissions with just Docker login, you can skip or adjust this.
-      #
       - name: Azure CLI Login
+        if: ${{ secrets.AZURE_CLIENT_ID && secrets.AZURE_CLIENT_SECRET && secrets.AZURE_TENANT_ID }}
         run: |
+          echo "Logging into Azure CLI with service principal..."
           az login --service-principal \
             -u "${{ secrets.AZURE_CLIENT_ID }}" \
             -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
-      
-      # - name: Log in to Azure Container Registry (Staging)
-      #   run: |
-      #     echo ${{ secrets.ACR_STAGE_PASSWORD }} | docker login terraacr2025prod.azurecr.io \
-      #       -u ${{ secrets.ACR_STAGE_USERNAME }} --password-stdin
-      #     az acr login --name terraacr2025prod
-      #     echo "Logging into ACR (terraacr2025prod)..."
-      #     az acr login --name terraacr2025prod || echo "Could not ACR login via az CLI."
+
+          echo "Logging into terraacr2025prod via az acr..."
+          az acr login --name terraacr2025prod || echo "Could not ACR login via az CLI."
 
       #
       # 3) Docker login to Production ACR
@@ -61,36 +54,33 @@ jobs:
             -u "${{ secrets.ACR_PROD_USERNAME }}" --password-stdin
 
       #
-      # 4) Determine Version Type (major/minor/patch)
-      #    by parsing merge commit & PR labels
+      # 4) Determine Version Type (major/minor/patch) + PR number
       #
       - name: Determine Version Type
         id: version_type
         run: |
           VERSION_TYPE="patch"  # default
-
-          # 1) Get the most recent commit message on 'main'
           COMMIT_MSG=$(git log -1 --pretty=%B)
           echo "Latest commit message:"
           echo "$COMMIT_MSG"
 
-          # 2) Extract PR number from lines like "Merge pull request #NN from ..."
+          # Extract PR number from typical merge commit lines: "Merge pull request #NN from ..."
           PR_NUMBER=$(echo "$COMMIT_MSG" \
             | grep -oE 'Merge pull request #[0-9]+' \
             | grep -oE '[0-9]+' || true)
 
           if [ -n "$PR_NUMBER" ]; then
-            echo "Detected a merged PR #$PR_NUMBER. Checking labels with gh CLI..."
+            echo "Detected a merged PR #$PR_NUMBER. Checking labels via gh CLI..."
             PR_LABELS=$(gh pr view "$PR_NUMBER" --json labels -q '.labels[].name' || true)
             echo "PR Labels: $PR_LABELS"
 
-            # Check for "major" or "minor" (case-insensitive) in labels
+            # Case-insensitive check for "major" or "minor"
             if echo "$PR_LABELS" | grep -qi "major"; then
               VERSION_TYPE="major"
             elif echo "$PR_LABELS" | grep -qi "minor"; then
               VERSION_TYPE="minor"
             else
-              # Optionally check commit for special keywords
+              # Optional commit keyword check (BREAKING CHANGE, feat:)
               if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
                 VERSION_TYPE="major"
               elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
@@ -98,8 +88,9 @@ jobs:
               fi
             fi
           else
-            echo "No merged PR reference found in commit message. Defaulting to patch..."
-            # Optionally check commit for keywords
+            echo "No merged PR reference found. Defaulting to patch..."
+
+            # Optional fallback if no PR but you see keywords:
             if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* ]]; then
               VERSION_TYPE="major"
             elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
@@ -108,7 +99,9 @@ jobs:
           fi
 
           echo "VERSION_TYPE=$VERSION_TYPE" >> $GITHUB_ENV
+          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
           echo "Version Type: $VERSION_TYPE"
+          echo "PR Number: $PR_NUMBER"
 
       #
       # 5) Fetch latest vX.Y.Z tag from Production ACR & increment
@@ -116,7 +109,7 @@ jobs:
       - name: Fetch latest image tag from Prod ACR
         id: versioning
         run: |
-          echo "=== Fetching all tags for 'myapp' in Prod ACR (debug) ==="
+          echo "=== Fetching all tags for 'myapp' in Prod ACR (debug info) ==="
           az acr repository show-tags --name terraacr2025prod --repository myapp --orderby time_desc --output table || true
 
           echo "=== Fetching latest vX.Y.Z tag ==="
@@ -137,9 +130,8 @@ jobs:
           MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
           PATCH=$(echo "$LATEST_TAG" | awk -F. '{print $3}')
 
-          echo "Extracted version components: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
+          echo "Parsed: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
 
-          # Read VERSION_TYPE from environment
           case "${VERSION_TYPE}" in
             major)
               MAJOR=$((MAJOR + 1))
@@ -155,7 +147,14 @@ jobs:
               ;;
           esac
 
+          # Build base version (vX.Y.Z)
           IMAGE_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+
+          # If we found a PR_NUMBER, append "-prNN"
+          if [ -n "${PR_NUMBER}" ]; then
+            IMAGE_TAG="${IMAGE_TAG}-pr${PR_NUMBER}"
+          fi
+
           echo "NEW image tag (after increment) = $IMAGE_TAG"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
