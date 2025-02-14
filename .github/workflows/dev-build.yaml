@@ -8,13 +8,16 @@ on:
   push:
     branches:
       - dev
+    paths-ignore:
+      - '.github/workflows/**'  # Prevents triggering if only workflow files change
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/dev'
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}  # Ensuring GitHub token is used properly
+
     steps:
       #
       # 1) Checkout the main app repository
@@ -68,7 +71,7 @@ jobs:
           VERSION_TYPE="patch"  # Default
 
           # Fetch PR labels using GitHub CLI (requires GH_TOKEN)
-          PR_LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' || true)
+          PR_LABELS=$(gh pr view "$(gh pr list --head dev --json number -q '.[0].number')" --json labels -q '.labels[].name' || echo "")
 
           echo "Detected PR Labels: $PR_LABELS"
 
@@ -100,12 +103,12 @@ jobs:
         id: versioning
         run: |
           echo "=== Fetching latest vX.Y.Z tag ==="
-          LATEST_TAG=$(az acr repository show-tags --name *** \
+          LATEST_TAG=$(az acr repository show-tags --name terraacr2025dev \
                       --repository myapp \
                       --orderby time_desc \
                       --output tsv 2>/dev/null \
                       | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-                      | head -n 1)
+                      | sort -V | tail -n 1)
 
           if [[ -z "$LATEST_TAG" ]]; then
             echo "No existing version found in ACR. Defaulting to v0.0.1 for first deployment."
