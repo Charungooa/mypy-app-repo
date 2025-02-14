@@ -9,7 +9,7 @@ on:
     branches:
       - main
     paths-ignore:
-      - '.github/workflows/**'  # Ignore workflow changes
+      - '.github/workflows/**'
   workflow_dispatch:
 
 jobs:
@@ -88,14 +88,21 @@ jobs:
                        --orderby time_desc \
                        --output tsv 2>/dev/null || true)
 
-          LATEST_TAG=$(echo "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          # 1. Filter out tags that match vX.Y.Z or vX.Y.Z-prNN
+          # 2. Strip off the -prNN suffix if present
+          CLEANED_TAGS=$(echo "$ALL_TAGS" \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-pr[0-9]+)?$' \
+            | sed -E 's/-pr[0-9]+$//')
+
+          # 3. Sort purely by semantic version and pick the last one (highest)
+          LATEST_TAG=$(echo "$CLEANED_TAGS" | sort -V | tail -n 1)
 
           if [ -z "$LATEST_TAG" ]; then
             echo "'myapp' repository found, but no valid tags. Starting at v0.0.0."
             LATEST_TAG="v0.0.0"
           fi
 
-          echo "Latest tag from ACR: $LATEST_TAG"
+          echo "Latest semver tag from ACR: $LATEST_TAG"
 
           MAJOR=$(echo "$LATEST_TAG" | awk -F. '{print substr($1,2)}')
           MINOR=$(echo "$LATEST_TAG" | awk -F. '{print $2}')
